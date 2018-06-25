@@ -34,6 +34,7 @@ function loadJpegMetadataFromBase64String(imageBase64String) {
   var metadata = EXIF.readFromBinaryFile(file);
   return metadata;
 }
+```
 
 **XMP**
 Since issue #53 was merged also extracting of XMP data is supported. To not slow down this is optional, and you need to call `EXIF.enableXmp();` before using `..getDatat()`.
