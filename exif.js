@@ -1,8 +1,6 @@
 (function() {
-
-    var debug = false;
-
-    var root = this;
+    var debug = true;
+    var self = this;
 
     var EXIF = function(obj) {
         if (obj instanceof EXIF) return obj;
@@ -16,7 +14,7 @@
         }
         exports.EXIF = EXIF;
     } else {
-        root.EXIF = EXIF;
+        self.EXIF = EXIF;
     }
 
     var ExifTags = EXIF.Tags = {
@@ -840,11 +838,6 @@
     }
 
    function findXMPinJPEG(file) {
-
-        if (!('DOMParser' in self)) {
-            // console.warn('XML parsing not supported without DOMParser');
-            return;
-        }
         var dataView = new DataView(file);
 
         if (debug) console.log("Got file of length " + file.byteLength);
@@ -853,9 +846,7 @@
            return false; // not a valid jpeg
         }
 
-        var offset = 2,
-            length = file.byteLength,
-            dom = new DOMParser();
+        var offset = 2, length = file.byteLength;
 
         while (offset < (length-4)) {
             if (getStringFromDB(dataView, offset, 4) == "http") {
@@ -882,7 +873,7 @@
                             + 'xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/" '
                             + xmpString.slice(indexOfXmp)
 
-                var domDocument = dom.parseFromString( xmpString, 'text/xml' );
+                var domDocument = XmlService.parse(xmpString);
                 return xml2Object(domDocument);
             } else{
              offset++;
@@ -893,23 +884,25 @@
     function xml2json(xml) {
         var json = {};
       
-        if (xml.nodeType == 1) { // element node
-          if (xml.attributes.length > 0) {
+        if (xml.getType().name() == "ELEMENT") {
+          var xmlAttributes = xml.getAttributes();
+          if (xmlAttributes.length > 0) {
             json['@attributes'] = {};
-            for (var j = 0; j < xml.attributes.length; j++) {
-              var attribute = xml.attributes.item(j);
-              json['@attributes'][attribute.nodeName] = attribute.nodeValue;
+            for (var j = 0; j < xmlAttributes.length; j++) {
+              var attribute = xmlAttributes[j];
+              json['@attributes'][attribute.getNamespace().getPrefix()+":"+attribute.getName()] = attribute.getValue();
             }
           }
-        } else if (xml.nodeType == 3) { // text node
-          return xml.nodeValue;
+        } else if (xml.getType().name() == "TEXT") {
+          return xml.getValue();
         }
       
         // deal with children
-        if (xml.hasChildNodes()) {
-          for(var i = 0; i < xml.childNodes.length; i++) {
-            var child = xml.childNodes.item(i);
-            var nodeName = child.nodeName;
+      var xmlChildNodes = xml.getChildren();
+        if (xmlChildNodes.length > 0) {
+          for(var i = 0; i < xmlChildNodes.length; i++) {
+            var child = xmlChildNodes[i];
+            var nodeName = child.getQualifiedName();
             if (json[nodeName] == null) {
               json[nodeName] = xml2json(child);
             } else {
@@ -929,20 +922,21 @@
     function xml2Object(xml) {
         try {
             var obj = {};
-            if (xml.children.length > 0) {
-              for (var i = 0; i < xml.children.length; i++) {
-                var item = xml.children.item(i);
-                var attributes = item.attributes;
+            var xmlChildren = xml.getRootElement().getChildren();
+            if (xmlChildren.length > 0) {
+              for (var i = 0; i < xmlChildren.length; i++) {
+                var item = xmlChildren[i];
+                var attributes = item.getAttributes();
                 for(var idx in attributes) {
                     var itemAtt = attributes[idx];
-                    var dataKey = itemAtt.nodeName;
-                    var dataValue = itemAtt.nodeValue;
+                    var dataKey = itemAtt.getQualifiedName();
+                    var dataValue = itemAtt.getValue();
 
                     if(dataKey !== undefined) {
                         obj[dataKey] = dataValue;
                     }
                 }
-                var nodeName = item.nodeName;
+                var nodeName = item.getQualifiedName();
 
                 if (typeof (obj[nodeName]) == "undefined") {
                   obj[nodeName] = xml2json(item);
@@ -957,7 +951,7 @@
                 }
               }
             } else {
-              obj = xml.textContent;
+              obj = xml.getText();
             }
             return obj;
           } catch (e) {
@@ -1046,8 +1040,17 @@
         return strPretty;
     }
 
-    EXIF.readFromBinaryFile = function(file) {
-        return findEXIFinJPEG(file);
+    EXIF.readFromBinaryFile = function(binFile) {
+		var metadata = {};			
+		var exifdata = findEXIFinJPEG(binFile);
+		metadata.exifdata = exifdata || {};
+		var iptcdata = findIPTCinJPEG(binFile);
+		metadata.iptcdata = iptcdata || {};
+		if (EXIF.isXmpEnabled) {
+		   var xmpdata= findXMPinJPEG(binFile);
+		   metadata.xmpdata = xmpdata || {};               
+		}
+		return metadata;
     }
 
     if (typeof define === 'function' && define.amd) {
@@ -1057,3 +1060,76 @@
     }
 }.call(this));
 
+// Some classes that exif.js requires but Google Apps Script doesn't provide
+var console = {};
+console.log = function(message) {
+  Logger.log(message);
+}
+
+var Uint8Array = function(buffer, byteOffset, length) {
+  var self = this;
+  
+  self.buffer = buffer;
+  self.byteOffset = byteOffset;
+  self.length = length;
+};
+
+var Blob = function(blobParts, options) {
+  var self = this;
+  
+  self.blobParts = blobParts;
+  self.options = options;
+};
+
+var File = function(bytes) {
+  var self = this;
+  
+  self.bytes = bytes;
+  self.byteLength = bytes.length;
+};
+
+var DataView = function(file) {
+  var self = this;
+  
+  self.file = file;
+  
+  self.getUint8 = function(index) {
+    return self.file.bytes[index] < 0 ? self.file.bytes[index] + 256 : self.file.bytes[index];
+  };
+  
+  self.getUint16 = function(index, bigEnd) {
+    if(!bigEnd) {
+      return self.getUint8(index) * 256 + self.getUint8(index + 1);
+    } else {
+      return self.getUint8(index) + self.getUint8(index + 1) * 256;
+    }
+  };
+  
+  self.getUint32 = function(index, bigEnd) {
+    if(!bigEnd) {
+      return self.getUint8(index) * 256 * 256 * 256 + self.getUint8(index + 1) * 256 * 256 + self.getUint8(index + 2) * 256 + self.getUint8(index + 3);
+    } else {
+      return self.getUint8(index) + self.getUint8(index + 1) * 256 + self.getUint8(index + 2) * 256 * 256 + self.getUint8(index + 3) * 256 * 256 * 256;
+    }
+  };
+  
+  self.getInt8 = function(index) {
+	return self.file.bytes[index];
+  };
+  
+  self.getInt16 = function(index, bigEnd) {
+    if(!bigEnd) {
+      return self.getInt8(index) * 256 + self.getInt8(index + 1);
+    } else {
+      return self.getInt8(index) + self.getInt8(index + 1) * 256;
+    }
+  };
+  
+  self.getInt32 = function(index, bigEnd) {
+    if(!bigEnd) {
+      return self.getInt8(index) * 256 * 256 * 256 + self.getInt8(index + 1) * 256 * 256 + self.getInt8(index + 2) * 256 + self.getInt8(index + 3);
+    } else {
+      return self.getInt8(index) + self.getInt8(index + 1) * 256 + self.getInt8(index + 2) * 256 * 256 + self.getInt8(index + 3) * 256 * 256 * 256;
+    }
+  };
+};
